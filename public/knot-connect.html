@@ -116,12 +116,60 @@
     </div>
   </div>
 
+  <script src="https://unpkg.com/knotapi-js@1.0.6"></script>
   <script>
-    document.getElementById('connectForm').addEventListener('submit', (e) => {
+    document.getElementById('connectForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const phone = document.getElementById('phone').value.replace(/\D/g, '');
-      const formattedPhone = phone.startsWith('1') ? `+${phone}` : `+1${phone}`;
-      window.location.href = `/auth/knot?phone=${encodeURIComponent(formattedPhone)}`;
+      const btn = e.target.querySelector('button');
+      btn.disabled = true;
+      btn.textContent = 'Connecting...';
+
+      const phone = document.getElementById('phone').value.trim();
+
+      try {
+        const res = await fetch('/auth/knot/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone })
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.session) {
+          alert(`Failed to create session: ${data.error || JSON.stringify(data)}`);
+          btn.disabled = false;
+          btn.textContent = 'Connect Account';
+          return;
+        }
+
+        const { session } = data;
+        console.log('Session created:', session);
+
+        const KnotapiJS = window.KnotapiJS.default;
+        const knotapi = new KnotapiJS();
+
+        const [cfg, merchants] = await Promise.all([
+          fetch('/config').then(r => r.json()),
+          fetch('/transactions/merchants').then(r => r.json())
+        ]);
+        knotapi.open({
+          sessionId: session,
+          clientId: cfg.knotClientId,
+          environment: 'development',
+          entryPoint: 'onboarding',
+          merchantIds: [44],
+          onEvent: (event, merchant, payload) => console.log('Knot event:', event, merchant, payload),
+          onSuccess: () => alert('Account connected! You can now receive SMS insights.'),
+          onError: (code, msg) => {
+            console.error('Knot onError:', code, msg);
+            alert(`Knot error: ${JSON.stringify(code)}`);
+          },
+          onExit: () => { btn.disabled = false; btn.textContent = 'Connect Account'; }
+        });
+      } catch (err) {
+        alert('Failed to start session. Is the server running?');
+        btn.disabled = false;
+        btn.textContent = 'Connect Account';
+      }
     });
   </script>
 </body>

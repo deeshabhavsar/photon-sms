@@ -2,6 +2,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { pool } from './db/client.js';
 import knotOAuthRouter from './routes/knot-oauth.js';
+import transactionsRouter from './routes/transactions.js';
+import { startSmsHandler } from './sms-handler.js';
 
 dotenv.config();
 
@@ -15,6 +17,13 @@ app.use(express.static('public'));
 
 // Routes
 app.use('/auth/knot', knotOAuthRouter);
+app.use('/webhooks/knot', knotOAuthRouter);
+app.use('/transactions', transactionsRouter);
+
+// Expose non-secret client config to frontend
+app.get('/config', (req, res) => {
+  res.json({ knotClientId: process.env.KNOT_CLIENT_ID });
+});
 
 // Health check
 app.get('/', (req, res) => {
@@ -42,4 +51,5 @@ app.get('/health/db', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📊 Database: ${process.env.DATABASE_URL?.split('@')[1]?.split('/')[1] || 'Not configured'}`);
+  startSmsHandler().catch(err => console.error('SMS handler failed to start:', err));
 });

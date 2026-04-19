@@ -4,86 +4,73 @@ import { pool } from '../db/client.js';
 
 const router = express.Router();
 
-// Step 1: Redirect user to Knot OAuth
-router.get('/', (req, res) => {
-  const { phone } = req.query;
+function knotAuthHeader() {
+  const credentials = `${process.env.KNOT_CLIENT_ID}:${process.env.KNOT_SECRET}`;
+  return `Basic ${Buffer.from(credentials).toString('base64')}`;
+}
+
+function toE164(phone) {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return `+${digits}`;
+}
+
+// Create a Knot session for a user (call this before initializing the SDK)
+router.post('/session', async (req, res) => {
+  const { merchant_id } = req.body;
+  const phone = toE164(req.body.phone ?? '');
 
   if (!phone) {
-    return res.status(400).json({ error: 'Phone number required' });
-  }
-
-  // Store phone in session/state (for hackathon, we'll use query param)
-  const state = Buffer.from(JSON.stringify({ phone })).toString('base64');
-
-  const authUrl = `${process.env.KNOT_API_BASE_URL}/oauth/authorize?` +
-    `client_id=${process.env.KNOT_CLIENT_ID}&` +
-    `redirect_uri=${encodeURIComponent(process.env.KNOT_REDIRECT_URI)}&` +
-    `response_type=code&` +
-    `state=${state}`;
-
-  res.redirect(authUrl);
-});
-
-// Step 2: Handle OAuth callback from Knot
-router.get('/callback', async (req, res) => {
-  const { code, state } = req.query;
-
-  if (!code) {
-    return res.status(400).send('Authorization failed - no code received');
+    return res.status(400).json({ error: 'phone is required' });
   }
 
   try {
-    // Decode state to get phone
-    const { phone } = JSON.parse(Buffer.from(state, 'base64').toString());
-
-    // Exchange code for access token
-    const tokenResponse = await axios.post(
-      `${process.env.KNOT_API_BASE_URL}/oauth/token`,
+    const response = await axios.post(
+      `${process.env.KNOT_API_BASE_URL}/session/create`,
       {
-        grant_type: 'authorization_code',
-        code,
-        client_id: process.env.KNOT_CLIENT_ID,
-        client_secret: process.env.KNOT_CLIENT_SECRET,
-        redirect_uri: process.env.KNOT_REDIRECT_URI
-      }
+        type: 'transaction_link',
+        external_user_id: phone,
+        phone_number: phone,
+        ...(merchant_id && { merchant_id })
+      },
+      { headers: { Authorization: knotAuthHeader() } }
     );
 
-    const { access_token, refresh_token, user_id } = tokenResponse.data;
-
-    // Store tokens in database
+    // Upsert user into DB
     await pool.query(
-      `INSERT INTO users (phone, knot_user_id, knot_access_token, knot_refresh_token)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (phone) DO UPDATE
-       SET knot_user_id = $2, knot_access_token = $3, knot_refresh_token = $4, updated_at = NOW()`,
-      [phone, user_id, access_token, refresh_token]
+      `INSERT INTO users (phone) VALUES ($1)
+       ON CONFLICT (phone) DO UPDATE SET updated_at = NOW()`,
+      [phone]
     );
 
-    console.log(`✅ Knot connected for user: ${phone}`);
-
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Connected!</title>
-        <style>
-          body { font-family: sans-serif; text-align: center; padding: 50px; }
-          .success { color: #10b981; font-size: 48px; }
-          p { font-size: 18px; color: #666; }
-        </style>
-      </head>
-      <body>
-        <div class="success">✓</div>
-        <h1>Account Connected!</h1>
-        <p>Your purchase data is now linked. You can close this window and start texting your money coach.</p>
-      </body>
-      </html>
-    `);
-
+    res.json({ session: response.data.session });
   } catch (error) {
-    console.error('❌ Knot OAuth error:', error.response?.data || error.message);
-    res.status(500).send('Failed to connect account. Please try again.');
+    console.error('Knot session error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to create Knot session' });
   }
+});
+
+// Webhook handler — Knot notifies us when accounts are linked or transactions are ready
+router.post('/webhook', async (req, res) => {
+  console.log('Knot webhook full body:', JSON.stringify(req.body, null, 2));
+  const { event, external_user_id, merchant } = req.body;
+  const merchant_id = merchant?.id;
+
+  if (event === 'NEW_TRANSACTIONS_AVAILABLE' && external_user_id && merchant_id) {
+    try {
+      const response = await axios.post(
+        `${process.env.KNOT_API_BASE_URL}/transactions/sync`,
+        { merchant_id, external_user_id, limit: 100 },
+        { headers: { Authorization: knotAuthHeader() } }
+      );
+      console.log(`Synced ${response.data.transactions?.length} transactions for ${external_user_id}`);
+    } catch (err) {
+      console.error('Auto-sync failed:', err.response?.data || err.message);
+    }
+  }
+
+  res.sendStatus(200);
 });
 
 export default router;
