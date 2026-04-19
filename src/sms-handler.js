@@ -213,13 +213,11 @@ async function handleBudget(space, text, userData) {
 
   const { amount, category, period } = parsed;
   const endsAt = await createBudget(userData.userId, category, amount, period);
-  const spent = await getBudgetSpending(userData.userId, category, new Date(Date.now() - (period === 'monthly' ? 30 : 7) * 24 * 60 * 60 * 1000));
-  const remaining = Math.max(0, amount - spent);
 
   await space.send(
     `Budget set! $${amount} ${period} cap for ${category}. ` +
-    `You've spent $${spent.toFixed(2)} already this period — $${remaining.toFixed(2)} left. ` +
-    `I'll flag it in your updates. Active until ${endsAt.toLocaleDateString()}.`
+    `You're starting fresh — $${amount.toFixed(2)} to spend. ` +
+    `I'll track it and let you know when you're getting close. Active until ${endsAt.toLocaleDateString()}.`
   );
 }
 

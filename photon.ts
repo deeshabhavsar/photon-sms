@@ -14,7 +14,7 @@ async function main() {
     const im = imessage(app);
     const user = await im.user(target);
     const dm = await im.space(user);
-    await dm.send("hello from photon");
+    await dm.send("Hey there! This is a message from your friend Lanny :)\n\nI'm here to help you understand your spending and find ways to save. Just reply with any questions you have about your recent purchases or if you want to set up a budget. Looking forward to chatting with you!");
   }
 
   for await (const [, message] of app.messages) {
